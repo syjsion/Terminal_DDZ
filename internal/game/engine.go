@@ -8,11 +8,15 @@ import (
 )
 
 var (
-	ErrWrongPhase   = errors.New("当前阶段不允许该操作")
-	ErrWrongTurn    = errors.New("还没有轮到该玩家")
-	ErrInvalidBid   = errors.New("叫分不合法")
-	ErrInvalidMove  = errors.New("出牌不合法")
-	ErrGameFinished = errors.New("游戏已经结束")
+	ErrWrongPhase          = errors.New("当前阶段不允许该操作")
+	ErrWrongTurn           = errors.New("还没有轮到该玩家")
+	ErrInvalidBid          = errors.New("叫分不合法")
+	ErrInvalidMove         = errors.New("出牌不合法")
+	ErrGameFinished        = errors.New("游戏已经结束")
+	ErrNoCardsSelected     = errors.New("请先选择要出的牌")
+	ErrSelectedCardsAbsent = errors.New("所选牌不在当前手牌中")
+	ErrSelectedHandInvalid = errors.New("所选牌不构成合法牌型")
+	ErrSelectedCannotBeat  = errors.New("所选牌无法压过当前牌")
 )
 
 type Engine struct {
@@ -235,6 +239,44 @@ func (e *Engine) ApplyMove(seat, moveID int) error {
 	}
 	e.state.CurrentSeat = (seat + 1) % 3
 	return nil
+}
+
+// ApplyCards lets a human-facing client submit selected cards without knowing
+// the temporary legal move ID. The selection is still matched against the
+// engine-generated legal move set before it is applied.
+func (e *Engine) ApplyCards(seat int, cards []Card) error {
+	if e.state.Finished {
+		return ErrGameFinished
+	}
+	if e.state.Phase != PhasePlaying {
+		return ErrWrongPhase
+	}
+	if seat != e.state.CurrentSeat {
+		return ErrWrongTurn
+	}
+	if len(cards) == 0 {
+		return ErrNoCardsSelected
+	}
+	have := RankCounts(e.state.Players[seat].Hand)
+	for rank, count := range RankCounts(cards) {
+		if have[rank] < count {
+			return ErrSelectedCardsAbsent
+		}
+	}
+	analyzed, err := AnalyzeMove(cards)
+	if err != nil {
+		return ErrSelectedHandInvalid
+	}
+	if target := e.state.CurrentTrick.LastMove; target != nil && !Beats(analyzed, *target) {
+		return ErrSelectedCannotBeat
+	}
+	key := analyzed.key()
+	for _, legal := range e.LegalMoves(seat) {
+		if !legal.IsPass && legal.key() == key {
+			return e.ApplyMove(seat, legal.ID)
+		}
+	}
+	return ErrInvalidMove
 }
 
 func (e *Engine) validateSelectedMove(seat int, move Move) error {

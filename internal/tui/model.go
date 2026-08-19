@@ -29,6 +29,13 @@ const (
 	overlayAIError
 )
 
+type playMode uint8
+
+const (
+	playModeCandidates playMode = iota
+	playModeManual
+)
+
 type SessionStats struct {
 	Rounds        int
 	HumanWins     int
@@ -48,46 +55,68 @@ type Model struct {
 	isLLM  [3]bool
 	logger *log.Logger
 
-	screen      screen
-	overlay     overlay
-	menuCursor  int
-	cursor      int
-	width       int
-	height      int
-	moves       []game.Move
-	bids        []int
-	showCounter bool
-	showHistory bool
-	aiThinking  bool
-	status      string
-	lastAIError error
-	failedSeat  int
-	stats       SessionStats
-	countedGame uint64
+	screen          screen
+	overlay         overlay
+	menuCursor      int
+	cursor          int
+	playMode        playMode
+	handCursor      int
+	selectedHand    map[int]bool
+	selectionTurnID uint64
+	width           int
+	height          int
+	moves           []game.Move
+	bids            []int
+	showCounter     bool
+	showHistory     bool
+	aiThinking      bool
+	status          string
+	lastAIError     error
+	failedSeat      int
+	stats           SessionStats
+	countedGame     uint64
 }
 
 func NewModel(ctx context.Context, cancel context.CancelFunc, cfg config.Config, engine *game.Engine, agents [3]ai.Agent, isLLM [3]bool, logger *log.Logger) *Model {
 	return &Model{
 		ctx: ctx, cancel: cancel, cfg: cfg, engine: engine, agents: agents, isLLM: isLLM, logger: logger,
 		screen: screenMenu, showCounter: cfg.General.ShowCardCounter, showHistory: cfg.General.ShowHistoryPanel,
+		selectedHand: make(map[int]bool),
 	}
 }
 
 func (m *Model) Init() tea.Cmd { return nil }
 
 func (m *Model) refreshChoices() {
-	m.cursor = 0
 	m.moves = nil
 	m.bids = nil
 	state := m.engine.State()
+	if m.selectionTurnID != state.TurnID {
+		m.cursor = 0
+		m.playMode = playModeCandidates
+		m.handCursor = 0
+		clear(m.selectedHand)
+		m.selectionTurnID = state.TurnID
+	}
 	if state.CurrentSeat != 0 {
 		return
 	}
 	if state.Phase == game.PhaseBidding {
 		m.bids = m.engine.LegalBids(0)
 	} else if state.Phase == game.PhasePlaying {
-		m.moves = m.engine.LegalMoves(0)
+		m.moves = rankHumanMoves(state.Players[0].Hand, m.engine.LegalMoves(0), state.CurrentTrick.LastMove)
 	}
+}
+
+func (m *Model) selectedCards() []game.Card {
+	hand := m.engine.State().Players[0].Hand
+	cards := make([]game.Card, 0, len(m.selectedHand))
+	for index, card := range hand {
+		if m.selectedHand[index] {
+			cards = append(cards, card)
+		}
+	}
+	return cards
 }
 
 func (m *Model) startRound() tea.Cmd {

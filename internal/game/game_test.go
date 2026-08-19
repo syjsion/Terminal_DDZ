@@ -1,6 +1,7 @@
 package game
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -257,5 +258,55 @@ func TestCounterUsesOnlyVisibleInformation(t *testing.T) {
 	}
 	if got := fmt.Sprint(counter.OtherCounts); got == "" {
 		t.Fatal("other counts missing")
+	}
+}
+
+func TestApplyCardsMatchesLegalMoveAndPreservesEntities(t *testing.T) {
+	e := NewEngine(WithSeed(17))
+	if err := e.StartRound(); err != nil {
+		t.Fatal(err)
+	}
+	landlord := e.State().CurrentSeat
+	if err := e.ApplyBid(landlord, 3); err != nil {
+		t.Fatal(err)
+	}
+	move := e.LegalMoves(landlord)[0]
+	if move.IsPass {
+		t.Fatal("lead move cannot be PASS")
+	}
+	if err := e.ApplyCards(landlord, move.Cards); err != nil {
+		t.Fatalf("ApplyCards: %v", err)
+	}
+	if err := ValidateInvariants(e.State()); err != nil {
+		t.Fatalf("invariants after ApplyCards: %v", err)
+	}
+}
+
+func TestApplyCardsReportsSelectionErrors(t *testing.T) {
+	e := NewEngine(WithSeed(1))
+	e.state = GameState{
+		Phase: PhasePlaying, CurrentSeat: 0, LandlordSeat: 0, BidScore: 1, Multiplier: 1,
+		Players:      [3]PlayerState{{Seat: 0, Hand: testCards("3 3 3 4 5 8 8 10 10")}, {Seat: 1, Hand: testCards("6")}, {Seat: 2, Hand: testCards("7")}},
+		CurrentTrick: TrickState{LeadSeat: 1, LastMove: cloneMovePtr(mustMove(t, "9 9"))},
+	}
+	tests := []struct {
+		name  string
+		cards string
+		want  error
+	}{
+		{"empty", "", ErrNoCardsSelected},
+		{"absent", "A", ErrSelectedCardsAbsent},
+		{"invalid shape", "3 3 4", ErrSelectedHandInvalid},
+		{"cannot beat", "8 8", ErrSelectedCannotBeat},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := e.ApplyCards(0, testCards(tc.cards)); !errors.Is(err, tc.want) {
+				t.Fatalf("ApplyCards(%q) = %v, want %v", tc.cards, err, tc.want)
+			}
+		})
+	}
+	if err := e.ApplyCards(0, testCards("10 10")); err != nil {
+		t.Fatalf("legal manual response rejected: %v", err)
 	}
 }

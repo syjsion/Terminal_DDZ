@@ -139,6 +139,19 @@ func (m *Model) handleGameKey(key string) (tea.Model, tea.Cmd) {
 	if state.CurrentSeat != 0 || m.aiThinking {
 		return m, nil
 	}
+	if state.Phase == game.PhasePlaying && key == "tab" {
+		if m.playMode == playModeCandidates {
+			m.playMode = playModeManual
+			m.status = "手动选牌：←/→ 移动，Space 选择，Enter 出牌"
+		} else {
+			m.playMode = playModeCandidates
+			m.status = "已切换到推荐候选"
+		}
+		return m, nil
+	}
+	if state.Phase == game.PhasePlaying && m.playMode == playModeManual {
+		return m.handleManualPlayKey(key, state)
+	}
 	count := len(m.moves)
 	if state.Phase == game.PhaseBidding {
 		count = len(m.bids)
@@ -157,7 +170,7 @@ func (m *Model) handleGameKey(key string) (tea.Model, tea.Cmd) {
 		if index < count {
 			m.cursor = index
 		}
-	case "space":
+	case "space", "p", "P":
 		if state.Phase == game.PhasePlaying {
 			for _, move := range m.moves {
 				if move.IsPass {
@@ -180,11 +193,55 @@ func (m *Model) handleGameKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) handleManualPlayKey(key string, state game.GameState) (tea.Model, tea.Cmd) {
+	hand := state.Players[0].Hand
+	switch key {
+	case "left":
+		if m.handCursor > 0 {
+			m.handCursor--
+		}
+	case "right":
+		if m.handCursor+1 < len(hand) {
+			m.handCursor++
+		}
+	case "space":
+		if len(hand) > 0 {
+			if m.selectedHand[m.handCursor] {
+				delete(m.selectedHand, m.handCursor)
+			} else {
+				m.selectedHand[m.handCursor] = true
+			}
+		}
+	case "backspace", "ctrl+h":
+		clear(m.selectedHand)
+		m.status = "已清空手选牌"
+	case "p", "P":
+		for _, move := range m.moves {
+			if move.IsPass {
+				return m, m.applyHumanMove(move.ID)
+			}
+		}
+		m.status = "当前是首出，不能 PASS"
+	case "enter":
+		return m, m.applyHumanCards(m.selectedCards())
+	}
+	return m, nil
+}
+
 func (m *Model) applyHumanMove(id int) tea.Cmd {
 	if err := m.engine.ApplyMove(0, id); err != nil {
 		m.status = err.Error()
 		return nil
 	}
+	return m.advance()
+}
+
+func (m *Model) applyHumanCards(cards []game.Card) tea.Cmd {
+	if err := m.engine.ApplyCards(0, cards); err != nil {
+		m.status = err.Error()
+		return nil
+	}
+	m.status = "出牌成功"
 	return m.advance()
 }
 

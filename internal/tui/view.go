@@ -88,7 +88,7 @@ func (m *Model) viewSettings() string {
 func (m *Model) viewGame() string {
 	state := m.engine.State()
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s    第 %d 局    倍率 x%d\n%s\n", titleStyle.Render("Terminal 斗地主"), state.Round, state.Multiplier, m.divider())
+	fmt.Fprintf(&b, "%s  第 %d 局  倍率 x%d  轮到：Seat %d %s\n", titleStyle.Render("Terminal 斗地主"), state.Round, state.Multiplier, state.CurrentSeat, state.Players[state.CurrentSeat].Name)
 	for seat := 1; seat < 3; seat++ {
 		p := state.Players[seat]
 		thinking := ""
@@ -99,26 +99,40 @@ func (m *Model) viewGame() string {
 				thinking = " [思考中...]"
 			}
 		}
-		separator := "\n"
-		if m.height <= 26 && seat == 1 {
-			separator = "    |    "
+		separator := "    |    "
+		if seat == 2 {
+			separator = "\n"
 		}
 		fmt.Fprintf(&b, "Seat %d %s [%s] %d 张%s%s", seat, p.Name, p.Role, len(p.Hand), thinking, separator)
 	}
 	if state.LandlordSeat >= 0 {
-		fmt.Fprintf(&b, "底牌（公开）：%s\n", game.CardsString(state.BottomCards))
+		fmt.Fprintf(&b, "底牌：%s\n", game.CardsString(state.BottomCards))
+		if m.showCounter {
+			b.WriteString(m.viewCounter(state))
+		} else {
+			b.WriteString("记牌器：[R 展开]\n")
+		}
+	} else {
+		b.WriteString("底牌：叫地主后公开\n记牌器：叫地主后启用\n")
 	}
+	b.WriteString(m.divider() + "\n")
 	if state.CurrentTrick.LastMove != nil {
 		lead := state.CurrentTrick.LeadSeat
 		fmt.Fprintf(&b, "当前目标：%s  ·  %s\n", state.CurrentTrick.LastMove.Label(), state.Players[lead].Name)
+	} else if state.Phase == game.PhaseBidding {
+		b.WriteString("当前阶段：叫地主\n")
 	} else {
 		b.WriteString("当前目标：新一轮首出\n")
 	}
-	fmt.Fprintf(&b, "轮到：Seat %d %s\n%s\n", state.CurrentSeat, state.Players[state.CurrentSeat].Name, m.divider())
-	fmt.Fprintf(&b, "你的身份：%s  ·  手牌 [%d]\n%s\n", state.Players[0].Role, len(state.Players[0].Hand), game.CardsString(state.Players[0].Hand))
+	if m.showHistory {
+		b.WriteString(m.viewHistory(state))
+	} else {
+		b.WriteString("出牌历史：[H 展开]\n")
+	}
+	b.WriteString(m.divider() + "\n")
 
 	if state.Phase == game.PhaseBidding {
-		b.WriteString("\n叫地主：\n")
+		b.WriteString("叫地主：\n")
 		if state.CurrentSeat == 0 {
 			for i, bid := range m.bids {
 				label := fmt.Sprintf("[%d] %s", i+1, bidLabel(bid))
@@ -132,58 +146,74 @@ func (m *Model) viewGame() string {
 			b.WriteString("等待 AI 叫分...\n")
 		}
 	} else if state.Phase == game.PhasePlaying {
-		b.WriteString("\n合法动作：\n")
-		if state.CurrentSeat == 0 {
-			pageSize := 7
+		if state.CurrentSeat == 0 && m.playMode == playModeManual {
+			b.WriteString("手动选牌：" + m.manualSelectionSummary(state) + "\n")
+			b.WriteString("←/→ 移动 · Space 选择 · Enter 出牌 · Backspace 清空 · P PASS\n")
+		} else if state.CurrentSeat == 0 {
+			b.WriteString("推荐候选（Tab 切换手选）：\n")
+			pageSize := 6
 			if m.height <= 26 {
 				pageSize = 3
 			}
 			start, end := visibleRange(m.cursor, len(m.moves), pageSize)
 			for i := start; i < end; i++ {
 				move := m.moves[i]
-				label := fmt.Sprintf("[%d] %s", move.ID, move.Label())
+				typeLabel := handTypeLabel(move.Type)
+				if move.IsPass {
+					typeLabel = "过牌"
+				}
+				label := fmt.Sprintf("[%d] %s（%s）", i+1, move.Label(), typeLabel)
+				if i == 0 && !move.IsPass {
+					label += " [推荐]"
+				}
 				if i == m.cursor {
 					fmt.Fprintf(&b, "> %s\n", selectStyle.Render(label))
 				} else {
 					fmt.Fprintf(&b, "  %s\n", label)
 				}
 			}
-			fmt.Fprintf(&b, "动作 %d-%d / %d\n", start+1, end, len(m.moves))
+			fmt.Fprintf(&b, "候选 %d-%d / %d\n", start+1, end, len(m.moves))
 		} else {
 			b.WriteString("等待 AI 选择合法动作...\n")
 		}
 	}
-	if m.showCounter && state.LandlordSeat >= 0 {
-		b.WriteString(m.viewCounter(state))
-	}
-	if m.showHistory {
-		b.WriteString(m.viewHistory(state))
-	}
+	b.WriteString(m.divider() + "\n")
+	fmt.Fprintf(&b, "你的身份：%s  ·  手牌 [%d]\n", state.Players[0].Role, len(state.Players[0].Hand))
+	b.WriteString(m.renderHumanHand(state) + "\n")
 	if m.status != "" {
-		fmt.Fprintf(&b, "\n%s", warnStyle.Render(m.status))
+		fmt.Fprintf(&b, "%s\n", warnStyle.Render(m.status))
 	}
-	b.WriteString("\n\n↑↓/jk 选择 · Enter 确认 · Space PASS · R 记牌 · H 历史 · ? 帮助 · Q 退出")
+	if state.Phase == game.PhasePlaying {
+		b.WriteString("Tab 候选/手选 · ↑↓/jk 候选 · P PASS · R 记牌 · H 历史 · ? 帮助 · Q 退出")
+	} else {
+		b.WriteString("↑↓/jk 选择 · Enter 确认 · R 记牌 · H 历史 · ? 帮助 · Q 退出")
+	}
 	return b.String()
 }
 
 func (m *Model) viewCounter(state game.GameState) string {
 	counter := game.BuildCounter(state, 0)
 	var b strings.Builder
-	b.WriteString("\n记牌器：")
+	b.WriteString("记牌器：")
 	for i, rank := range game.AllRanks {
 		if m.width < 100 && i == 8 {
-			b.WriteString("\n          ")
+			b.WriteString("\n        ")
 		}
 		fmt.Fprintf(&b, " %s:%d", rank, counter.UnknownByRank[rank])
 	}
-	fmt.Fprintf(&b, "\n已出现炸弹：%d · 王炸仍可能存在：%s", counter.BombsPlayed, yesNo(counter.RocketPossible))
+	fmt.Fprintf(&b, "\n炸弹：%d · 王炸可能：%s\n", counter.BombsPlayed, yesNo(counter.RocketPossible))
 	return b.String()
 }
 
 func (m *Model) viewHistory(state game.GameState) string {
 	var b strings.Builder
-	b.WriteString("\n历史：")
-	history := state.History
+	b.WriteString("出牌历史：")
+	history := make([]game.ActionRecord, 0, len(state.History))
+	for _, action := range state.History {
+		if state.Phase == game.PhaseBidding || action.Kind == game.ActionPlay {
+			history = append(history, action)
+		}
+	}
 	limit := 5
 	if m.height <= 26 {
 		limit = 2
@@ -191,19 +221,64 @@ func (m *Model) viewHistory(state game.GameState) string {
 	if len(history) > limit {
 		history = history[len(history)-limit:]
 	}
-	for _, action := range history {
+	if len(history) == 0 {
+		b.WriteString("暂无记录\n")
+		return b.String()
+	}
+	b.WriteByte('\n')
+	for i, action := range history {
 		name := state.Players[action.Seat].Name
 		if action.Kind == game.ActionBid {
-			fmt.Fprintf(&b, "\n#%02d %-10s 叫分 %s", action.Number, name, bidLabel(action.Bid))
+			fmt.Fprintf(&b, "#%02d %-10s 叫分 %s", action.Number, name, bidLabel(action.Bid))
 		} else {
-			fmt.Fprintf(&b, "\n#%02d %-10s %s", action.Number, name, action.Move.Label())
+			fmt.Fprintf(&b, "#%02d %-10s %s", action.Number, name, action.Move.Label())
+		}
+		if i+1 < len(history) {
+			b.WriteByte('\n')
 		}
 	}
+	b.WriteByte('\n')
 	return b.String()
 }
 
 func (m *Model) viewHelp() string {
-	return fmt.Sprintf("%s\n\n↑ / k       上一个候选\n↓ / j       下一个候选\nEnter       确认候选\nSpace       PASS（仅跟牌时）\n1-9         快速选择当前页候选\nR           打开/关闭记牌器\nH           打开/关闭历史\n?           关闭帮助\nQ           请求退出\nEsc         关闭弹层 / 返回\n\n牌力：3 < 4 < 5 < 6 < 7 < 8 < 9 < 10 < J < Q < K < A < 2 < SJ < BJ\n\n[Esc/?/Enter] 返回游戏", titleStyle.Render("帮助"))
+	return fmt.Sprintf("%s\n\n候选模式\n  ↑/↓ 或 j/k  移动候选\n  Enter        出牌\n  Space / P    PASS（仅跟牌时）\n  1-9          快速定位候选\n\n手选模式\n  Tab          切换候选/手选\n  ←/→          移动手牌光标\n  Space        选择/取消牌\n  Enter        提交所选牌\n  Backspace    清空选择\n  P            PASS\n\n通用\n  R 记牌器 · H 历史 · ? 帮助 · Q 退出 · Esc 返回\n\n牌力：3 < 4 < 5 < 6 < 7 < 8 < 9 < 10 < J < Q < K < A < 2 < SJ < BJ\n\n[Esc/?/Enter] 返回游戏", titleStyle.Render("帮助"))
+}
+
+func (m *Model) renderHumanHand(state game.GameState) string {
+	hand := state.Players[0].Hand
+	if m.playMode != playModeManual || state.CurrentSeat != 0 || state.Phase != game.PhasePlaying {
+		return game.CardsString(hand)
+	}
+	parts := make([]string, len(hand))
+	for index, card := range hand {
+		label := card.String()
+		if m.selectedHand[index] {
+			label = "[" + label + "]"
+		}
+		if index == m.handCursor {
+			label = selectStyle.Render(">" + label + "<")
+		} else if m.selectedHand[index] {
+			label = selectStyle.Render(label)
+		}
+		parts[index] = label
+	}
+	return strings.Join(parts, " ")
+}
+
+func (m *Model) manualSelectionSummary(state game.GameState) string {
+	cards := m.selectedCards()
+	if len(cards) == 0 {
+		return "尚未选择"
+	}
+	move, err := game.AnalyzeMove(cards)
+	if err != nil {
+		return fmt.Sprintf("%s · 未形成合法牌型", game.CardsString(cards))
+	}
+	if state.CurrentTrick.LastMove != nil && !game.Beats(move, *state.CurrentTrick.LastMove) {
+		return fmt.Sprintf("%s · %s · 无法压过当前牌", game.CardsString(cards), handTypeLabel(move.Type))
+	}
+	return fmt.Sprintf("%s · %s", game.CardsString(cards), handTypeLabel(move.Type))
 }
 
 func (m *Model) viewResult() string {
