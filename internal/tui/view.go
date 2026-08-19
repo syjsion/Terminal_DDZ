@@ -89,6 +89,16 @@ func (m *Model) viewGame() string {
 	state := m.engine.State()
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  第 %d 局  倍率 x%d  轮到：Seat %d %s\n", titleStyle.Render("Terminal 斗地主"), state.Round, state.Multiplier, state.CurrentSeat, state.Players[state.CurrentSeat].Name)
+	if state.LandlordSeat >= 0 {
+		fmt.Fprintf(&b, "底牌：%s\n", game.CardsString(state.BottomCards))
+		if m.showCounter {
+			b.WriteString(m.viewCounter(state))
+		} else {
+			b.WriteString("记牌器：[R 展开]\n")
+		}
+	} else {
+		b.WriteString("底牌：叫地主后公开\n记牌器：叫地主后启用\n")
+	}
 	for seat := 1; seat < 3; seat++ {
 		p := state.Players[seat]
 		thinking := ""
@@ -104,16 +114,6 @@ func (m *Model) viewGame() string {
 			separator = "\n"
 		}
 		fmt.Fprintf(&b, "Seat %d %s [%s] %d 张%s%s", seat, p.Name, p.Role, len(p.Hand), thinking, separator)
-	}
-	if state.LandlordSeat >= 0 {
-		fmt.Fprintf(&b, "底牌：%s\n", game.CardsString(state.BottomCards))
-		if m.showCounter {
-			b.WriteString(m.viewCounter(state))
-		} else {
-			b.WriteString("记牌器：[R 展开]\n")
-		}
-	} else {
-		b.WriteString("底牌：叫地主后公开\n记牌器：叫地主后启用\n")
 	}
 	b.WriteString(m.divider() + "\n")
 	if state.CurrentTrick.LastMove != nil {
@@ -207,19 +207,23 @@ func (m *Model) viewCounter(state game.GameState) string {
 
 func (m *Model) viewHistory(state game.GameState) string {
 	var b strings.Builder
-	b.WriteString("出牌历史：")
 	history := make([]game.ActionRecord, 0, len(state.History))
 	for _, action := range state.History {
 		if state.Phase == game.PhaseBidding || action.Kind == game.ActionPlay {
 			history = append(history, action)
 		}
 	}
-	limit := 5
-	if m.height <= 26 {
-		limit = 2
+	if len(history) > 6 {
+		history = history[len(history)-6:]
 	}
-	if len(history) > limit {
-		history = history[len(history)-limit:]
+	retained := len(history)
+	visible := retained
+	if m.height <= 26 && visible > 3 {
+		visible = 3
+		history = history[retained-visible:]
+		fmt.Fprintf(&b, "出牌历史（显示 %d/%d，增高窗口查看）：", visible, retained)
+	} else {
+		b.WriteString("出牌历史：")
 	}
 	if len(history) == 0 {
 		b.WriteString("暂无记录\n")

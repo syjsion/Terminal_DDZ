@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -162,16 +163,63 @@ func TestGameLayoutInformationOrder(t *testing.T) {
 		content := m.View().Content
 		bottom := strings.Index(content, "底牌：")
 		counter := strings.Index(content, "记牌器：")
+		seats := strings.Index(content, "Seat 1 ")
 		history := strings.Index(content, "出牌历史：")
 		action := strings.Index(content, "推荐候选")
 		hand := strings.Index(content, "你的身份：")
-		if !(bottom >= 0 && bottom < counter && counter < history && history < action && action < hand) {
-			t.Fatalf("unexpected layout order at %dx%d: bottom=%d counter=%d history=%d action=%d hand=%d\n%s", size.Width, size.Height, bottom, counter, history, action, hand, content)
+		if !(bottom >= 0 && bottom < counter && counter < seats && seats < history && history < action && action < hand) {
+			t.Fatalf("unexpected layout order at %dx%d: bottom=%d counter=%d seats=%d history=%d action=%d hand=%d\n%s", size.Width, size.Height, bottom, counter, seats, history, action, hand, content)
 		}
 	}
 	m.showCounter, m.showHistory = false, false
 	content := m.View().Content
 	if strings.Index(content, "记牌器：[R 展开]") > strings.Index(content, "出牌历史：[H 展开]") || strings.Index(content, "出牌历史：[H 展开]") > strings.Index(content, "你的身份：") {
 		t.Fatal("collapsed regions changed layout order")
+	}
+}
+
+func TestHistoryKeepsSixAndAdaptsToTerminalHeight(t *testing.T) {
+	m := testModel(t)
+	state := game.GameState{Phase: game.PhasePlaying}
+	state.Players[0].Name = "你"
+	state.Players[1].Name = "AI-1"
+	state.Players[2].Name = "AI-2"
+	for number := 1; number <= 8; number++ {
+		state.History = append(state.History, game.ActionRecord{
+			Number: number,
+			Kind:   game.ActionPlay,
+			Seat:   number % 3,
+			Move:   game.Move{Type: game.Single, Cards: []game.Card{{Rank: game.Rank3}}},
+		})
+	}
+
+	m.height = 30
+	tall := m.viewHistory(state)
+	if strings.Contains(tall, "#01") || strings.Contains(tall, "#02") {
+		t.Fatalf("tall history retained old rows:\n%s", tall)
+	}
+	for number := 3; number <= 8; number++ {
+		if !strings.Contains(tall, fmt.Sprintf("#%02d", number)) {
+			t.Fatalf("tall history missing #%02d:\n%s", number, tall)
+		}
+	}
+
+	m.height = 24
+	compact := m.viewHistory(state)
+	if !strings.Contains(compact, "显示 3/6，增高窗口查看") {
+		t.Fatalf("compact history missing indicator:\n%s", compact)
+	}
+	for number := 3; number <= 5; number++ {
+		if strings.Contains(compact, fmt.Sprintf("#%02d", number)) {
+			t.Fatalf("compact history displayed old #%02d:\n%s", number, compact)
+		}
+	}
+	for number := 6; number <= 8; number++ {
+		if !strings.Contains(compact, fmt.Sprintf("#%02d", number)) {
+			t.Fatalf("compact history missing #%02d:\n%s", number, compact)
+		}
+	}
+	if len(state.History) != 8 {
+		t.Fatalf("viewHistory mutated engine history: %d", len(state.History))
 	}
 }

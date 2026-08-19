@@ -21,9 +21,16 @@ type stubAgent struct{ id int }
 
 type blockingDoer struct{}
 
+type countingDoer struct{ calls atomic.Int32 }
+
 func (blockingDoer) Do(req *http.Request) (*http.Response, error) {
 	<-req.Context().Done()
 	return nil, req.Context().Err()
+}
+
+func (d *countingDoer) Do(*http.Request) (*http.Response, error) {
+	d.calls.Add(1)
+	return nil, errors.New("unexpected HTTP request")
 }
 
 func (s stubAgent) ChooseBid(context.Context, player.PlayerView, []int) (int, error) {
@@ -62,6 +69,47 @@ func TestChooseMoveRetriesCodeFenceAndUsesAuth(t *testing.T) {
 	legal := []game.Move{{ID: 7, Type: game.Single, Cards: []game.Card{{Rank: game.Rank3}}}}
 	id, err := agent.ChooseMove(context.Background(), player.PlayerView{Seat: 1, OwnCards: legal[0].Cards, OtherCounts: map[int]int{0: 17, 2: 17}}, legal)
 	if err != nil || id != 7 || calls.Load() != 2 {
+		t.Fatalf("ChooseMove = %d, %v, calls=%d", id, err, calls.Load())
+	}
+}
+
+func TestChooseMoveOnlyPassSkipsHTTP(t *testing.T) {
+	doer := &countingDoer{}
+	agent := NewAgent("test", providerFor("https://example.invalid"), 80, nil, false, doer)
+	pass := game.PassMove()
+	pass.ID = 17
+	id, err := agent.ChooseMove(context.Background(), player.PlayerView{}, []game.Move{pass})
+	if err != nil || id != 17 || doer.calls.Load() != 0 {
+		t.Fatalf("ChooseMove = %d, %v, calls=%d", id, err, doer.calls.Load())
+	}
+}
+
+func TestChooseMoveOnlyPassHonorsCancellation(t *testing.T) {
+	doer := &countingDoer{}
+	agent := NewAgent("test", providerFor("https://example.invalid"), 80, nil, false, doer)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pass := game.PassMove()
+	pass.ID = 17
+	_, err := agent.ChooseMove(ctx, player.PlayerView{}, []game.Move{pass})
+	if !errors.Is(err, context.Canceled) || doer.calls.Load() != 0 {
+		t.Fatalf("ChooseMove error = %v, calls=%d", err, doer.calls.Load())
+	}
+}
+
+func TestChooseMovePassAndBombStillCallsHTTP(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write(response(`{"move":9}`))
+	}))
+	defer server.Close()
+	agent := NewAgent("test", providerFor(server.URL), 80, nil, false, server.Client())
+	pass := game.PassMove()
+	pass.ID = 0
+	bomb := game.Move{ID: 9, Type: game.Bomb, MainRank: game.Rank3, Cards: []game.Card{{Rank: game.Rank3}, {Rank: game.Rank3}, {Rank: game.Rank3}, {Rank: game.Rank3}}}
+	id, err := agent.ChooseMove(context.Background(), player.PlayerView{Seat: 1, Role: game.RoleFarmer, LandlordSeat: 0, OwnCards: bomb.Cards, OtherCounts: map[int]int{0: 1, 2: 2}}, []game.Move{pass, bomb})
+	if err != nil || id != 9 || calls.Load() != 1 {
 		t.Fatalf("ChooseMove = %d, %v, calls=%d", id, err, calls.Load())
 	}
 }
@@ -156,5 +204,37 @@ func TestMovePromptNeverUsesTRank(t *testing.T) {
 	prompt := movePrompt(view, []game.Move{{ID: 1, Type: game.Single, Cards: view.OwnCards}})
 	if strings.Contains(prompt, " T ") || !strings.Contains(prompt, "10") {
 		t.Fatalf("invalid rank rendering: %s", prompt)
+	}
+}
+
+func TestMovePromptIncludesPublicStrategyContext(t *testing.T) {
+	view := player.PlayerView{
+		Seat:         1,
+		Role:         game.RoleFarmer,
+		LandlordSeat: 0,
+		Multiplier:   4,
+		OwnCards:     []game.Card{{Rank: game.Rank3}, {Rank: game.Rank3}},
+		OtherCounts:  map[int]int{0: 1, 2: 2},
+		BottomPublic: []game.Card{{Rank: game.Rank2}},
+		LastMove: &player.PublicMove{Seat: 2, Move: game.Move{
+			Type: game.Single, MainRank: game.Rank4, Cards: []game.Card{{Rank: game.Rank4}},
+		}},
+		PlayedCards: []game.ActionRecord{{Kind: game.ActionPlay, Seat: 0, Move: game.Move{Type: game.Single, Cards: []game.Card{{Rank: game.Rank5}}}}},
+	}
+	legal := []game.Move{{ID: 7, Type: game.Pair, MainRank: game.Rank3, Cards: view.OwnCards}}
+	prompt := movePrompt(view, legal)
+	for _, want := range []string{
+		"Current target: Seat 2 (teammate)",
+		"Seat 0 (opponent/landlord)=1",
+		"Unplayed cards outside your hand by rank:",
+		"type=PAIR",
+		"cards_used=2",
+		"cards_remaining=0",
+		"finishes_hand=yes",
+		"usually PASS when your teammate controls",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }

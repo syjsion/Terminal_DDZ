@@ -31,6 +31,13 @@ type Agent struct {
 	http         HTTPDoer
 }
 
+const systemPrompt = `You are a strong Dou Dizhu (斗地主) decision agent.
+Choose exactly one ID from the legal options. Never invent cards or use hidden opponent cards.
+Evaluate the position silently: immediate wins and forced defense come first, then control, hand structure, and card economy.
+Landlords must stop either farmer from going out. Farmers must cooperate and avoid taking control from a well-positioned teammate without a concrete reason.
+Preserve bombs, the rocket, 2s, and jokers unless they secure a win, stop an urgent threat, or create decisive control.
+Return JSON only, with no explanation.`
+
 func NewAgent(name string, provider config.ProviderConfig, maxMoves int, fallback ai.Agent, fallbackOn bool, doer HTTPDoer) *Agent {
 	if doer == nil {
 		doer = http.DefaultClient
@@ -62,6 +69,12 @@ func (a *Agent) ChooseBid(ctx context.Context, view player.PlayerView, legalBids
 }
 
 func (a *Agent) ChooseMove(ctx context.Context, view player.PlayerView, legalMoves []game.Move) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(legalMoves) == 1 && legalMoves[0].IsPass {
+		return legalMoves[0].ID, nil
+	}
 	candidates := PruneLegalMoves(legalMoves, a.maxMoves, len(view.OwnCards))
 	prompt := movePrompt(view, candidates)
 	valid := make(map[int]bool, len(candidates))
@@ -134,7 +147,7 @@ func (a *Agent) request(parent context.Context, prompt string) (string, error) {
 	payload := chatRequest{
 		Model: a.provider.Model,
 		Messages: []chatMessage{
-			{Role: "system", Content: "You are a Dou Dizhu AI. Select only from legal IDs. Never invent cards. Return JSON only."},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.2,
