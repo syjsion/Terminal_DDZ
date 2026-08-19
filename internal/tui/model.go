@@ -53,7 +53,11 @@ type Model struct {
 	engine *game.Engine
 	agents [3]ai.Agent
 	isLLM  [3]bool
-	logger *log.Logger
+	// configuredAgents/configuredIsLLM preserve the startup configuration so a
+	// per-round manual downgrade never leaks into the next game.
+	configuredAgents [3]ai.Agent
+	configuredIsLLM  [3]bool
+	logger           *log.Logger
 
 	screen          screen
 	overlay         overlay
@@ -79,7 +83,8 @@ type Model struct {
 
 func NewModel(ctx context.Context, cancel context.CancelFunc, cfg config.Config, engine *game.Engine, agents [3]ai.Agent, isLLM [3]bool, logger *log.Logger) *Model {
 	return &Model{
-		ctx: ctx, cancel: cancel, cfg: cfg, engine: engine, agents: agents, isLLM: isLLM, logger: logger,
+		ctx: ctx, cancel: cancel, cfg: cfg, engine: engine,
+		agents: agents, isLLM: isLLM, configuredAgents: agents, configuredIsLLM: isLLM, logger: logger,
 		screen: screenMenu, showCounter: cfg.General.ShowCardCounter, showHistory: cfg.General.ShowHistoryPanel,
 		selectedHand: make(map[int]bool),
 	}
@@ -124,11 +129,20 @@ func (m *Model) startRound() tea.Cmd {
 		m.status = err.Error()
 		return nil
 	}
+	m.restoreConfiguredAgents()
 	m.screen = screenGame
 	m.overlay = overlayNone
 	m.status = "新一局开始"
 	m.refreshChoices()
 	return m.advance()
+}
+
+func (m *Model) restoreConfiguredAgents() {
+	m.agents = m.configuredAgents
+	m.isLLM = m.configuredIsLLM
+	m.aiThinking = false
+	m.lastAIError = nil
+	m.failedSeat = 0
 }
 
 func (m *Model) advance() tea.Cmd {

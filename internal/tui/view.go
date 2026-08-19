@@ -40,7 +40,7 @@ func (m *Model) View() tea.View {
 		}
 		if m.overlay == overlayAIError {
 			content += "\n\n" + errorStyle.Render(fmt.Sprintf("AI 请求失败：%v", m.lastAIError))
-			content += "\n[R] 重试  [L] 切换本地 AI  [Q] 退出"
+			content += "\n[R] 重试  [L] 本局切换本地 AI  [Q] 退出"
 		}
 	}
 	view := tea.NewView(content)

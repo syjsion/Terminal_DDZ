@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -221,5 +222,40 @@ func TestHistoryKeepsSixAndAdaptsToTerminalHeight(t *testing.T) {
 	}
 	if len(state.History) != 8 {
 		t.Fatalf("viewHistory mutated engine history: %d", len(state.History))
+	}
+}
+
+func TestStartRoundRestoresConfiguredLLMAfterManualDowngrade(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	cfg := config.Default()
+	cfg.General.AIDelayMS = 0
+	original := local.New(local.Normal, 11)
+	agents := [3]ai.Agent{nil, original, local.New(local.Normal, 12)}
+	isLLM := [3]bool{false, true, false}
+	m := NewModel(ctx, cancel, cfg, game.NewEngine(game.WithSeed(1)), agents, isLLM, nil)
+
+	m.agents[1] = local.New(local.Easy, 99)
+	m.isLLM[1] = false
+	m.lastAIError = errors.New("old LLM error")
+	m.failedSeat = 1
+
+	_ = m.startRound()
+	if m.agents[1] != original || !m.isLLM[1] {
+		t.Fatal("new round did not restore the configured LLM agent")
+	}
+	if m.lastAIError != nil || m.failedSeat != 0 {
+		t.Fatalf("new round retained stale AI error: %v, seat=%d", m.lastAIError, m.failedSeat)
+	}
+}
+
+func TestManualDowngradeMessageIsLimitedToCurrentRound(t *testing.T) {
+	m := testModel(t)
+	m.isLLM[1] = true
+	m.overlay = overlayAIError
+	m.failedSeat = 1
+	_, _ = m.handleOverlayKey("L")
+	if m.isLLM[1] || !strings.Contains(m.status, "本局已切换") || !strings.Contains(m.status, "新局将恢复 LLM") {
+		t.Fatalf("manual downgrade state or message is unclear: isLLM=%v status=%q", m.isLLM[1], m.status)
 	}
 }

@@ -113,7 +113,7 @@ func (m *Model) handleOverlayKey(key string) (tea.Model, tea.Cmd) {
 			m.agents[m.failedSeat] = local.New(difficulty, time.Now().UnixNano()+int64(m.failedSeat))
 			m.isLLM[m.failedSeat] = false
 			m.overlay = overlayNone
-			m.status = fmt.Sprintf("Seat %d 已切换为本地 AI", m.failedSeat)
+			m.status = fmt.Sprintf("Seat %d 本局已切换为本地 AI，新局将恢复 LLM", m.failedSeat)
 			return m, m.requestAI()
 		case "q", "Q":
 			m.overlay = overlayQuit
