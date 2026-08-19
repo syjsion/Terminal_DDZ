@@ -1,0 +1,20 @@
+# Local configuration / secrets
+config.toml
+*.local.toml
+
+# Logs
+*.log
+
+# Build output
+dist/
+bin/
+/terminal-ddz
+/terminal-ddz.exe
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

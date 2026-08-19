@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [windows, darwin, linux]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          name="terminal-ddz_${GOOS}_${GOARCH}"
+          if [ "$GOOS" = "windows" ]; then name="${name}.exe"; fi
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/syjsion/Terminal_DDZ/internal/version.Version=${GITHUB_REF_NAME} -X github.com/syjsion/Terminal_DDZ/internal/version.Commit=${GITHUB_SHA} -X github.com/syjsion/Terminal_DDZ/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o "dist/${name}" ./cmd/terminal-ddz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terminal-ddz-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

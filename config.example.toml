@@ -1,0 +1,39 @@
+[general]
+language = "zh-CN"
+theme = "work"
+show_card_counter = true
+show_history_panel = true
+ai_delay_ms = 350
+
+[game]
+local_ai_difficulty = "normal"
+llm_fallback = true
+max_llm_legal_moves = 80
+
+[player]
+name = "你"
+
+# type 可选 "local" 或 "llm"
+[ai1]
+name = "Worker-01"
+type = "local"
+difficulty = "normal"
+# provider = "provider_a"
+
+[ai2]
+name = "Worker-02"
+type = "local"
+difficulty = "normal"
+# provider = "provider_b"
+
+[providers.provider_a]
+base_url = "https://api.openai.com/v1"
+api_key = ""
+model = ""
+timeout_seconds = 15
+
+[providers.provider_b]
+base_url = "https://example.com/v1"
+api_key = ""
+model = ""
+timeout_seconds = 15
