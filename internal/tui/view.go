@@ -42,6 +42,9 @@ func (m *Model) View() tea.View {
 			content += "\n\n" + errorStyle.Render(fmt.Sprintf("AI 请求失败：%v", m.lastAIError))
 			content += "\n[R] 重试  [L] 本局切换本地 AI  [Q] 退出"
 		}
+		if m.overlay == overlayLeaveGame {
+			content += "\n\n" + warnStyle.Render("放弃当前对局并返回主菜单？ [Y/Enter] 确认  [N/Esc] 继续游戏")
+		}
 	}
 	view := tea.NewView(content)
 	view.AltScreen = true
@@ -184,9 +187,9 @@ func (m *Model) viewGame() string {
 		fmt.Fprintf(&b, "%s\n", warnStyle.Render(m.status))
 	}
 	if state.Phase == game.PhasePlaying {
-		b.WriteString("Tab 候选/手选 · ↑↓/jk 候选 · P PASS · R 记牌 · H 历史 · ? 帮助 · Q 退出")
+		b.WriteString("Tab 候选/手选 · ↑↓/jk 候选 · P PASS · R 记牌 · H 历史 · Esc 主菜单 · ? 帮助 · Q 退出")
 	} else {
-		b.WriteString("↑↓/jk 选择 · Enter 确认 · R 记牌 · H 历史 · ? 帮助 · Q 退出")
+		b.WriteString("↑↓/jk 选择 · Enter 确认 · R 记牌 · H 历史 · Esc 主菜单 · ? 帮助 · Q 退出")
 	}
 	return b.String()
 }
@@ -246,7 +249,7 @@ func (m *Model) viewHistory(state game.GameState) string {
 }
 
 func (m *Model) viewHelp() string {
-	return fmt.Sprintf("%s\n\n候选模式\n  ↑/↓ 或 j/k  移动候选\n  Enter        出牌\n  Space / P    PASS（仅跟牌时）\n  1-9          快速定位候选\n\n手选模式\n  Tab          切换候选/手选\n  ←/→          移动手牌光标\n  Space        选择/取消牌\n  Enter        提交所选牌\n  Backspace    清空选择\n  P            PASS\n\n通用\n  R 记牌器 · H 历史 · ? 帮助 · Q 退出 · Esc 返回\n\n牌力：3 < 4 < 5 < 6 < 7 < 8 < 9 < 10 < J < Q < K < A < 2 < SJ < BJ\n\n[Esc/?/Enter] 返回游戏", titleStyle.Render("帮助"))
+	return fmt.Sprintf("%s\n\n候选模式\n  ↑/↓ 或 j/k  移动候选\n  Enter        出牌\n  Space / P    PASS（仅跟牌时）\n  1-9          快速定位候选\n\n手选模式\n  Tab          切换候选/手选\n  ←/→          移动手牌光标\n  Space        选择/取消牌\n  Enter        提交所选牌\n  Backspace    清空选择\n  P            PASS\n\n通用\n  R 记牌器 · H 历史 · ? 帮助 · Q 退出程序\n  Esc          关闭弹层；游戏中可确认返回主菜单\n\n牌力：3 < 4 < 5 < 6 < 7 < 8 < 9 < 10 < J < Q < K < A < 2 < SJ < BJ\n\n[Esc/?/Enter] 返回游戏", titleStyle.Render("帮助"))
 }
 
 func (m *Model) renderHumanHand(state game.GameState) string {

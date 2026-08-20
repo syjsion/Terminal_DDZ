@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -118,11 +119,33 @@ func (m *Model) handleOverlayKey(key string) (tea.Model, tea.Cmd) {
 		case "q", "Q":
 			m.overlay = overlayQuit
 		}
+	case overlayLeaveGame:
+		switch key {
+		case "y", "Y", "enter":
+			m.engine.AbortRound()
+			m.restoreConfiguredAgents()
+			m.screen = screenMenu
+			m.overlay = overlayNone
+			m.status = ""
+			m.moves = nil
+			m.bids = nil
+			m.cursor = 0
+			m.playMode = playModeCandidates
+			m.handCursor = 0
+			clear(m.selectedHand)
+			return m, nil
+		case "n", "N", "esc":
+			m.overlay = overlayNone
+		}
 	}
 	return m, nil
 }
 
 func (m *Model) handleGameKey(key string) (tea.Model, tea.Cmd) {
+	if key == "esc" {
+		m.overlay = overlayLeaveGame
+		return m, nil
+	}
 	if key == "?" {
 		m.overlay = overlayHelp
 		return m, nil
@@ -252,6 +275,9 @@ func (m *Model) requestAI() tea.Cmd {
 		return nil
 	}
 	m.aiThinking = true
+	m.cancelAIRequest()
+	requestCtx, requestCancel := context.WithCancel(m.ctx)
+	m.aiCancel = requestCancel
 	view := player.BuildView(state, seat)
 	agent := m.agents[seat]
 	isLLM := m.isLLM[seat]
@@ -264,12 +290,12 @@ func (m *Model) requestAI() tea.Cmd {
 				timer := time.NewTimer(delay)
 				defer timer.Stop()
 				select {
-				case <-m.ctx.Done():
-					return aiResultMsg{gameID: gameID, turnID: turnID, seat: seat, isBid: true, err: m.ctx.Err()}
+				case <-requestCtx.Done():
+					return aiResultMsg{gameID: gameID, turnID: turnID, seat: seat, isBid: true, err: requestCtx.Err()}
 				case <-timer.C:
 				}
 			}
-			choice, err := agent.ChooseBid(m.ctx, view, legal)
+			choice, err := agent.ChooseBid(requestCtx, view, legal)
 			return aiResultMsg{gameID: gameID, turnID: turnID, seat: seat, isBid: true, choice: choice, err: err}
 		}
 	}
@@ -279,12 +305,12 @@ func (m *Model) requestAI() tea.Cmd {
 			timer := time.NewTimer(delay)
 			defer timer.Stop()
 			select {
-			case <-m.ctx.Done():
-				return aiResultMsg{gameID: gameID, turnID: turnID, seat: seat, err: m.ctx.Err()}
+			case <-requestCtx.Done():
+				return aiResultMsg{gameID: gameID, turnID: turnID, seat: seat, err: requestCtx.Err()}
 			case <-timer.C:
 			}
 		}
-		choice, err := agent.ChooseMove(m.ctx, view, legal)
+		choice, err := agent.ChooseMove(requestCtx, view, legal)
 		return aiResultMsg{gameID: gameID, turnID: turnID, seat: seat, choice: choice, err: err}
 	}
 }
@@ -294,6 +320,7 @@ func (m *Model) handleAIResult(result aiResultMsg) (tea.Model, tea.Cmd) {
 	if result.gameID != state.GameID || result.turnID != state.TurnID || result.seat != state.CurrentSeat {
 		return m, nil
 	}
+	m.cancelAIRequest()
 	m.aiThinking = false
 	if result.err != nil {
 		var fallback *ai.FallbackError

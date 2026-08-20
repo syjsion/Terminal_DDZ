@@ -259,3 +259,33 @@ func TestManualDowngradeMessageIsLimitedToCurrentRound(t *testing.T) {
 		t.Fatalf("manual downgrade state or message is unclear: isLLM=%v status=%q", m.isLLM[1], m.status)
 	}
 }
+
+func TestEscapeCanAbandonRoundAndCancelAIRequest(t *testing.T) {
+	m := humanPlayingModel(t)
+	requestCtx, requestCancel := context.WithCancel(context.Background())
+	m.aiCancel = requestCancel
+	before := m.engine.State()
+
+	_, _ = m.handleGameKey("esc")
+	if m.overlay != overlayLeaveGame {
+		t.Fatal("Esc did not open the leave-game confirmation")
+	}
+	_, _ = m.handleOverlayKey("n")
+	if m.overlay != overlayNone || m.engine.State().GameID != before.GameID {
+		t.Fatal("canceling leave-game confirmation changed the round")
+	}
+
+	_, _ = m.handleGameKey("esc")
+	_, _ = m.handleOverlayKey("enter")
+	if m.screen != screenMenu || m.overlay != overlayNone || m.engine.State().Phase != game.PhaseBoot {
+		t.Fatalf("confirmed leave did not return to menu: screen=%v overlay=%v phase=%v", m.screen, m.overlay, m.engine.State().Phase)
+	}
+	select {
+	case <-requestCtx.Done():
+	default:
+		t.Fatal("leaving the round did not cancel the active AI request")
+	}
+	if err := m.engine.StartRound(); err != nil {
+		t.Fatalf("new game after leaving failed: %v", err)
+	}
+}

@@ -27,6 +27,7 @@ const (
 	overlayHelp
 	overlayQuit
 	overlayAIError
+	overlayLeaveGame
 )
 
 type playMode uint8
@@ -74,6 +75,7 @@ type Model struct {
 	showCounter     bool
 	showHistory     bool
 	aiThinking      bool
+	aiCancel        context.CancelFunc
 	status          string
 	lastAIError     error
 	failedSeat      int
@@ -138,11 +140,19 @@ func (m *Model) startRound() tea.Cmd {
 }
 
 func (m *Model) restoreConfiguredAgents() {
+	m.cancelAIRequest()
 	m.agents = m.configuredAgents
 	m.isLLM = m.configuredIsLLM
 	m.aiThinking = false
 	m.lastAIError = nil
 	m.failedSeat = 0
+}
+
+func (m *Model) cancelAIRequest() {
+	if m.aiCancel != nil {
+		m.aiCancel()
+		m.aiCancel = nil
+	}
 }
 
 func (m *Model) advance() tea.Cmd {

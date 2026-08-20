@@ -28,12 +28,15 @@ difficulty = "normal"
 
 [providers.provider_a]
 base_url = "https://api.openai.com/v1"
-api_key = ""
+# 推荐从环境变量读取，避免在配置文件中保存明文 Key。
+api_key_env = "OPENAI_API_KEY"
+# api_key = ""
 model = ""
 timeout_seconds = 15
 
 [providers.provider_b]
 base_url = "https://example.com/v1"
-api_key = ""
+api_key_env = "TERMINAL_DDZ_PROVIDER_B_KEY"
+# api_key = ""
 model = ""
 timeout_seconds = 15

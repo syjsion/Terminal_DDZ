@@ -63,6 +63,31 @@ func (e *Engine) StartRound() error {
 	return e.deal()
 }
 
+// AbortRound abandons an active round without recording a result. GameID and
+// TurnID are advanced so asynchronous decisions from the abandoned round can
+// be rejected safely by clients.
+func (e *Engine) AbortRound() {
+	if e.state.Phase != PhaseBidding && e.state.Phase != PhasePlaying {
+		return
+	}
+	round := e.state.Round
+	gameID := e.state.GameID + 1
+	turnID := e.state.TurnID + 1
+	e.state = GameState{
+		Phase:        PhaseBoot,
+		Round:        round,
+		GameID:       gameID,
+		TurnID:       turnID,
+		CurrentSeat:  0,
+		LandlordSeat: -1,
+		CurrentTrick: TrickState{LeadSeat: -1},
+		Players:      [3]PlayerState{{Seat: 0, Name: e.names[0]}, {Seat: 1, Name: e.names[1]}, {Seat: 2, Name: e.names[2]}},
+		Multiplier:   1,
+		BidState:     BidState{HighestSeat: -1},
+		WinnerTeam:   TeamNone,
+	}
+}
+
 func (e *Engine) deal() error {
 	deck := e.nextDeck
 	if len(deck) > 0 {

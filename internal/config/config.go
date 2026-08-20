@@ -43,6 +43,7 @@ type AIConfig struct {
 type ProviderConfig struct {
 	BaseURL        string `toml:"base_url"`
 	APIKey         string `toml:"api_key"`
+	APIKeyEnv      string `toml:"api_key_env"`
 	Model          string `toml:"model"`
 	TimeoutSeconds int    `toml:"timeout_seconds"`
 }
@@ -117,8 +118,16 @@ func validateProvider(name string, p ProviderConfig) error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("%s.base_url: 必须是有效的 HTTP(S) URL", prefix)
 	}
-	if strings.TrimSpace(p.APIKey) == "" {
-		return fmt.Errorf("%s.api_key: 不能为空", prefix)
+	apiKey := strings.TrimSpace(p.APIKey)
+	apiKeyEnv := strings.TrimSpace(p.APIKeyEnv)
+	if apiKey != "" && apiKeyEnv != "" {
+		return fmt.Errorf("%s: api_key 和 api_key_env 只能配置一个", prefix)
+	}
+	if apiKey == "" && apiKeyEnv == "" {
+		return fmt.Errorf("%s: api_key 和 api_key_env 至少配置一个", prefix)
+	}
+	if apiKeyEnv != "" && !validEnvName(apiKeyEnv) {
+		return fmt.Errorf("%s.api_key_env: %q 不是有效的环境变量名", prefix, apiKeyEnv)
 	}
 	if strings.TrimSpace(p.Model) == "" {
 		return fmt.Errorf("%s.model: 不能为空", prefix)
@@ -127,6 +136,16 @@ func validateProvider(name string, p ProviderConfig) error {
 		return fmt.Errorf("%s.timeout_seconds: 必须大于 0", prefix)
 	}
 	return nil
+}
+
+func validEnvName(name string) bool {
+	for i, char := range name {
+		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || char == '_' || (i > 0 && char >= '0' && char <= '9') {
+			continue
+		}
+		return false
+	}
+	return name != ""
 }
 
 func (c Config) AIConfigs() [2]AIConfig { return [2]AIConfig{c.AI1, c.AI2} }

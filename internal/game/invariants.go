@@ -6,6 +6,17 @@ func ValidateInvariants(state GameState) error {
 	if state.CurrentSeat < 0 || state.CurrentSeat > 2 {
 		return fmt.Errorf("CurrentSeat 越界: %d", state.CurrentSeat)
 	}
+	if state.Phase == PhaseBoot {
+		if len(state.BottomCards) != 0 || len(state.History) != 0 {
+			return fmt.Errorf("未开始状态仍包含底牌或历史")
+		}
+		for seat := range state.Players {
+			if len(state.Players[seat].Hand) != 0 {
+				return fmt.Errorf("未开始状态 Seat %d 仍有手牌", seat)
+			}
+		}
+		return nil
+	}
 	physical := make([]Card, 0, 54)
 	for seat := range state.Players {
 		physical = append(physical, state.Players[seat].Hand...)

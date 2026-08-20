@@ -176,6 +176,28 @@ func TestEngineDealAndBidding(t *testing.T) {
 	}
 }
 
+func TestAbortRoundInvalidatesPendingActionsAndAllowsRestart(t *testing.T) {
+	e := NewEngine(WithSeed(7))
+	if err := e.StartRound(); err != nil {
+		t.Fatal(err)
+	}
+	before := e.State()
+	e.AbortRound()
+	aborted := e.State()
+	if aborted.Phase != PhaseBoot || aborted.GameID <= before.GameID || aborted.TurnID <= before.TurnID {
+		t.Fatalf("abort did not invalidate active round: before=%+v after=%+v", before, aborted)
+	}
+	if err := ValidateInvariants(aborted); err != nil {
+		t.Fatalf("aborted state invariant: %v", err)
+	}
+	if err := e.StartRound(); err != nil {
+		t.Fatalf("restart after abort: %v", err)
+	}
+	if state := e.State(); state.Phase != PhaseBidding || state.GameID <= aborted.GameID {
+		t.Fatalf("restart state = phase %v game %d", state.Phase, state.GameID)
+	}
+}
+
 func findMoveID(t *testing.T, moves []Move, predicate func(Move) bool) int {
 	t.Helper()
 	for _, m := range moves {
