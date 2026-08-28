@@ -8,18 +8,37 @@ import (
 	"github.com/syjsion/Terminal_DDZ/internal/game"
 )
 
+type expertSimulationSearch struct {
+	cache *expertTacticalCache
+}
+
+func newExpertSimulationSearch(rootSeat int, rng *rand.Rand) *expertSimulationSearch {
+	return &expertSimulationSearch{cache: newExpertTacticalCache(rootSeat, rng.Int63())}
+}
+
 // runExpertSimulationSearch adds a shallow adversarial/cooperative reply tree
 // before falling back to the rollout policy. The tree is only enabled in
 // tactical positions so Expert gains lookahead without making every move slow.
 func runExpertSimulationSearch(ctx context.Context, state rolloutState, rootSeat, maxDepth int, rng *rand.Rand) int {
-	if value, done := expertTerminalValue(state, rootSeat); done {
+	return newExpertSimulationSearch(rootSeat, rng).evaluate(ctx, state, maxDepth)
+}
+
+func (s *expertSimulationSearch) evaluate(ctx context.Context, state rolloutState, maxDepth int) int {
+	if value, done := expertTerminalValue(state, s.cache.rootSeat); done {
 		return value
 	}
-	plies := expertTacticalPlies(state, rootSeat)
+	plies := expertTacticalPlies(state, s.cache.rootSeat)
 	if plies == 0 || maxDepth <= 0 {
-		return runExpertRollout(ctx, state, rootSeat, maxDepth, rng)
+		if value, ok := s.cache.lookup(state, 0, maxDepth); ok {
+			return value
+		}
+		value := runExpertRollout(ctx, state, s.cache.rootSeat, maxDepth, s.cache.rolloutRNG(state, 0, maxDepth))
+		if ctx.Err() == nil {
+			s.cache.store(state, 0, maxDepth, value)
+		}
+		return value
 	}
-	return runExpertTacticalTree(ctx, state, rootSeat, plies, maxDepth, rng)
+	return runExpertTacticalTreeCached(ctx, state, plies, maxDepth, s.cache)
 }
 
 func expertTacticalPlies(state rolloutState, rootSeat int) int {
@@ -29,8 +48,14 @@ func expertTacticalPlies(state rolloutState, rootSeat int) int {
 	rootCards := len(state.hands[rootSeat])
 	actorCards := len(state.hands[state.current])
 	enemyCards := rolloutEnemyMinCards(state, rootSeat)
+	totalCards := rolloutTotalCards(state)
 
-	if canFinishOnTurn(state, state.current) || rootCards <= 4 || actorCards <= 3 || enemyCards <= 1 {
+	// In very small determinizations, one extra explicit reply is affordable
+	// and catches setup moves that a two-ply search can miss.
+	if totalCards <= 10 || rootCards <= 2 || actorCards <= 2 || enemyCards <= 1 {
+		return 3
+	}
+	if canFinishOnTurn(state, state.current) || rootCards <= 4 || actorCards <= 3 {
 		return 2
 	}
 	if rootCards <= 7 || actorCards <= 5 || enemyCards <= 2 {
@@ -42,41 +67,59 @@ func expertTacticalPlies(state rolloutState, rootSeat int) int {
 	return 0
 }
 
+func rolloutTotalCards(state rolloutState) int {
+	return len(state.hands[0]) + len(state.hands[1]) + len(state.hands[2])
+}
+
 func runExpertTacticalTree(ctx context.Context, state rolloutState, rootSeat, plies, maxDepth int, rng *rand.Rand) int {
+	cache := newExpertTacticalCache(rootSeat, rng.Int63())
+	return runExpertTacticalTreeCached(ctx, state, plies, maxDepth, cache)
+}
+
+func runExpertTacticalTreeCached(ctx context.Context, state rolloutState, plies, maxDepth int, cache *expertTacticalCache) int {
 	if err := ctx.Err(); err != nil {
-		return evaluateRolloutPosition(state, rootSeat)
+		return evaluateRolloutPosition(state, cache.rootSeat)
 	}
-	if value, done := expertTerminalValue(state, rootSeat); done {
+	if value, ok := cache.lookup(state, plies, maxDepth); ok {
+		return value
+	}
+	if value, done := expertTerminalValue(state, cache.rootSeat); done {
+		cache.store(state, plies, maxDepth, value)
 		return value
 	}
 	if plies <= 0 || maxDepth <= 0 {
-		return runExpertRollout(ctx, state, rootSeat, maxDepth, rng)
+		value := runExpertRollout(ctx, state, cache.rootSeat, maxDepth, cache.rolloutRNG(state, plies, maxDepth))
+		if ctx.Err() == nil {
+			cache.store(state, plies, maxDepth, value)
+		}
+		return value
 	}
 
 	legal := game.GenerateLegalMoves(state.hands[state.current], state.target, state.target != nil)
 	if len(legal) == 0 {
-		return evaluateRolloutPosition(state, rootSeat)
+		value := evaluateRolloutPosition(state, cache.rootSeat)
+		cache.store(state, plies, maxDepth, value)
+		return value
 	}
 	candidates := selectTacticalReplyCandidates(state, legal, tacticalReplyBeam(plies))
-	allyTurn := sameRolloutTeam(state.landlord, rootSeat, state.current)
+	allyTurn := sameRolloutTeam(state.landlord, cache.rootSeat, state.current)
 
 	best := 1 << 30
 	if allyTurn {
 		best = -1 << 30
 	}
-	branchSeed := rng.Int63()
 	for _, move := range candidates {
+		if ctx.Err() != nil {
+			return evaluateRolloutPosition(state, cache.rootSeat)
+		}
 		child := state
 		applyRolloutMove(&child, move)
-		branchRNG := rand.New(rand.NewSource(branchSeed))
 
 		var value int
-		if terminal, done := expertTerminalValue(child, rootSeat); done {
+		if terminal, done := expertTerminalValue(child, cache.rootSeat); done {
 			value = terminal
-		} else if plies > 1 {
-			value = runExpertTacticalTree(ctx, child, rootSeat, plies-1, maxDepth-1, branchRNG)
 		} else {
-			value = runExpertRollout(ctx, child, rootSeat, maxDepth-1, branchRNG)
+			value = runExpertTacticalTreeCached(ctx, child, plies-1, maxDepth-1, cache)
 		}
 
 		if allyTurn {
@@ -86,6 +129,9 @@ func runExpertTacticalTree(ctx context.Context, state rolloutState, rootSeat, pl
 		} else if value < best {
 			best = value
 		}
+	}
+	if ctx.Err() == nil {
+		cache.store(state, plies, maxDepth, best)
 	}
 	return best
 }
