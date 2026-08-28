@@ -3,16 +3,10 @@ package local
 import (
 	"context"
 	"math/rand"
-	"sort"
 
 	"github.com/syjsion/Terminal_DDZ/internal/game"
 	"github.com/syjsion/Terminal_DDZ/internal/player"
 )
-
-type expertCandidate struct {
-	move      game.Move
-	baseScore int
-}
 
 type rolloutState struct {
 	hands    [3][]game.Card
@@ -22,83 +16,6 @@ type rolloutState struct {
 	target   *game.Move
 	passes   int
 	winner   int
-}
-
-func (a *Agent) chooseExpert(ctx context.Context, view player.PlayerView, legal []game.Move) (int, error) {
-	unseen := unseenRankCounts(view)
-	memo := make(map[string]int, 256)
-	candidates := make([]expertCandidate, 0, len(legal))
-	for _, move := range legal {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		candidates = append(candidates, expertCandidate{
-			move:      move,
-			baseScore: hardV2Score(ctx, view, move, unseen, memo),
-		})
-	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].baseScore > candidates[j].baseScore
-	})
-
-	limit, samples, depth := expertBudget(view, len(candidates))
-	if limit == 0 || samples == 0 {
-		return candidates[0].move.ID, nil
-	}
-	if limit > len(candidates) {
-		limit = len(candidates)
-	}
-
-	a.mu.Lock()
-	seed := a.rng.Int63()
-	a.mu.Unlock()
-	rng := rand.New(rand.NewSource(seed))
-
-	bestID := candidates[0].move.ID
-	bestScore := candidates[0].baseScore
-	for i := 0; i < limit; i++ {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		total, completed := 0, 0
-		for sample := 0; sample < samples; sample++ {
-			if err := ctx.Err(); err != nil {
-				return 0, err
-			}
-			state, ok := sampleRolloutState(view, rng)
-			if !ok {
-				continue
-			}
-			applyRolloutMove(&state, candidates[i].move)
-			total += runExpertRollout(ctx, state, view.Seat, depth, rng)
-			completed++
-		}
-		if completed == 0 {
-			continue
-		}
-		rolloutAverage := total / completed
-		finalScore := candidates[i].baseScore + rolloutAverage*2
-		if i == 0 || finalScore > bestScore {
-			bestScore = finalScore
-			bestID = candidates[i].move.ID
-		}
-	}
-	return bestID, nil
-}
-
-func expertBudget(view player.PlayerView, candidateCount int) (limit, samples, depth int) {
-	if candidateCount == 0 {
-		return 0, 0, 0
-	}
-	enemyCards := enemyMinCards(view)
-	switch {
-	case len(view.OwnCards) <= 8 || enemyCards <= 3:
-		return 7, 16, 36
-	case len(view.OwnCards) <= 12 || enemyCards <= 6:
-		return 6, 12, 30
-	default:
-		return 5, 8, 22
-	}
 }
 
 func sampleRolloutState(view player.PlayerView, rng *rand.Rand) (rolloutState, bool) {
@@ -227,69 +144,179 @@ func runExpertRollout(ctx context.Context, state rolloutState, rootSeat, maxDept
 }
 
 func chooseRolloutMove(state rolloutState, legal []game.Move, rng *rand.Rand) game.Move {
-	best := legal[0]
-	bestScore := -1 << 30
-	for _, move := range legal {
+	bestIndex, secondIndex := 0, -1
+	bestScore, secondScore := -1<<30, -1<<30
+	for i, move := range legal {
 		score := rolloutMoveScore(state, move)
-		if score > bestScore || (score == bestScore && rng.Intn(2) == 0) {
-			best, bestScore = move, score
+		if score > bestScore {
+			secondIndex, secondScore = bestIndex, bestScore
+			bestIndex, bestScore = i, score
+		} else if score > secondScore {
+			secondIndex, secondScore = i, score
 		}
 	}
-	return best
+	// A small amount of near-best policy diversity reduces rollout bias while
+	// never selecting an obviously inferior tactical move.
+	if secondIndex >= 0 && bestScore-secondScore <= 550 && rng.Intn(100) < 12 {
+		return legal[secondIndex]
+	}
+	return legal[bestIndex]
 }
 
 func rolloutMoveScore(state rolloutState, move game.Move) int {
 	seat := state.current
 	hand := state.hands[seat]
 	enemyCards := rolloutEnemyMinCards(state, seat)
-	if move.IsPass {
-		score := -80
-		if state.target != nil && sameRolloutTeam(state.landlord, seat, state.lead) {
-			score += 1200
-			if len(state.hands[state.lead]) <= 2 {
-				score += 800
-			}
-		}
-		if enemyCards <= 2 {
-			score -= 900
-		}
-		return score
-	}
-	if len(move.Cards) == len(hand) {
+	if !move.IsPass && len(move.Cards) == len(hand) {
 		return 100000
 	}
 
-	remaining := len(hand) - len(move.Cards)
-	score := len(move.Cards)*140 - int(move.MainRank)*5 - remaining*10
+	next := state
+	applyRolloutMove(&next, move)
+	if next.winner == seat {
+		return 100000
+	}
+
+	if move.IsPass {
+		score := -100
+		if state.target != nil && sameRolloutTeam(state.landlord, seat, state.lead) {
+			score += 1700
+			if len(state.hands[state.lead]) <= 2 {
+				score += 1400
+			}
+		}
+		if enemyCards <= 2 {
+			score -= 1000
+		}
+		score += immediateNextFinishScore(next, seat)
+		if next.target == nil && !sameRolloutTeam(state.landlord, seat, next.current) {
+			cards := len(next.hands[next.current])
+			if cards <= 2 {
+				score -= 1600
+			} else if cards <= 4 {
+				score -= 500
+			}
+		}
+		return score
+	}
+
+	remainingHand := next.hands[seat]
+	remaining := len(remainingHand)
+	score := len(move.Cards)*145 - int(move.MainRank)*5 - remaining*8
 	switch move.Type {
 	case game.Straight, game.PairStraight, game.Plane, game.PlaneWithSingles, game.PlaneWithPairs:
-		score += len(move.Cards) * 35
+		score += len(move.Cards) * 38
 	case game.TripleWithSingle, game.TripleWithPair:
-		score += 180
+		score += 220
 	case game.Bomb:
-		score -= 650
+		score -= 700
 	case game.Rocket:
-		score -= 850
+		score -= 900
 	}
-	if remaining <= 2 {
-		score += 900
+
+	// Endgame rollouts can afford a stronger hand-shape estimate. This keeps
+	// the simulated players from breaking a near-finished combination merely
+	// to shed one extra high card.
+	if remaining <= 8 {
+		turns := quickTurnEstimate(remainingHand)
+		score -= turns * 240
+		switch turns {
+		case 1:
+			score += 1600
+		case 2:
+			score += 700
+		}
+	} else {
+		score -= rolloutFragmentation(remainingHand) * 35
 	}
-	if enemyCards <= 2 {
-		score += 500
-		if move.Type == game.Bomb || move.Type == game.Rocket {
+
+	score += immediateNextFinishScore(next, seat)
+
+	// In sampled endgames we know the determinized hands, so we can detect
+	// whether this move is likely to retain control without peeking at the real
+	// hidden deal.
+	if remaining <= 6 || enemyCards <= 3 || (remaining <= 10 && len(move.Cards) >= 5) {
+		if !rolloutEnemyCanBeat(next, seat, move) {
 			score += 900
+			if remaining <= 3 {
+				score += 800
+			}
+		}
+	}
+
+	if enemyCards <= 2 {
+		score += 450
+		if move.Type == game.Bomb || move.Type == game.Rocket {
+			score += 950
 		}
 	}
 	if enemyCards == 1 && move.Type == game.Single {
-		score -= 1000
+		score -= 850
 	}
+
 	if state.target != nil && sameRolloutTeam(state.landlord, seat, state.lead) {
-		score -= 1200
+		score -= 1500
+		if len(state.hands[state.lead]) <= 2 {
+			score -= 900
+		}
 		if move.Type == game.Bomb || move.Type == game.Rocket {
-			score -= 1000
+			score -= 1100
 		}
 	}
+
 	return score
+}
+
+func immediateNextFinishScore(state rolloutState, mover int) int {
+	if state.winner >= 0 || !canFinishOnTurn(state, state.current) {
+		return 0
+	}
+	if sameRolloutTeam(state.landlord, mover, state.current) {
+		return 6500
+	}
+	return -14000
+}
+
+func canFinishOnTurn(state rolloutState, seat int) bool {
+	if seat < 0 || seat >= 3 || len(state.hands[seat]) == 0 {
+		return false
+	}
+	move, err := game.AnalyzeMove(state.hands[seat])
+	if err != nil {
+		return false
+	}
+	if state.target == nil {
+		return true
+	}
+	return game.Beats(move, *state.target)
+}
+
+func rolloutEnemyCanBeat(state rolloutState, mover int, target game.Move) bool {
+	for seat := 0; seat < 3; seat++ {
+		if seat == mover || sameRolloutTeam(state.landlord, mover, seat) {
+			continue
+		}
+		if len(game.GenerateLegalMoves(state.hands[seat], &target, false)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func rolloutFragmentation(hand []game.Card) int {
+	counts := game.RankCounts(hand)
+	penalty := 0
+	for _, rank := range game.AllRanks {
+		switch counts[rank] {
+		case 1:
+			penalty += 3
+		case 2:
+			penalty += 2
+		case 3:
+			penalty += 1
+		}
+	}
+	return penalty
 }
 
 func applyRolloutMove(state *rolloutState, move game.Move) {
@@ -324,25 +351,47 @@ func evaluateRolloutPosition(state rolloutState, rootSeat int) int {
 	if landlord < 0 || landlord >= 3 {
 		return 0
 	}
-	landlordTurns := quickTurnEstimate(state.hands[landlord])
-	farmerTurns := 99
+	landlordMetric := quickTurnEstimate(state.hands[landlord])*600 + len(state.hands[landlord])*22
+	farmerMetrics := make([]int, 0, 2)
 	for seat := 0; seat < 3; seat++ {
 		if seat == landlord {
 			continue
 		}
-		if turns := quickTurnEstimate(state.hands[seat]); turns < farmerTurns {
-			farmerTurns = turns
+		farmerMetrics = append(farmerMetrics, quickTurnEstimate(state.hands[seat])*600+len(state.hands[seat])*22)
+	}
+	bestFarmer, supportFarmer := farmerMetrics[0], farmerMetrics[1]
+	if supportFarmer < bestFarmer {
+		bestFarmer, supportFarmer = supportFarmer, bestFarmer
+	}
+	farmersMetric := bestFarmer + supportFarmer/7
+	score := farmersMetric - landlordMetric
+
+	controller := state.lead
+	if state.target == nil {
+		controller = state.current
+	}
+	if controller == landlord {
+		score += 260
+	} else if controller >= 0 {
+		score -= 260
+	}
+	if len(state.hands[landlord]) <= 2 {
+		score += 350
+	}
+	for seat := 0; seat < 3; seat++ {
+		if seat != landlord && len(state.hands[seat]) <= 2 {
+			score -= 230
 		}
 	}
-	score := (farmerTurns - landlordTurns) * 450
+
 	if rootSeat != landlord {
 		score = -score
 	}
-	if score > 3500 {
-		return 3500
+	if score > 4200 {
+		return 4200
 	}
-	if score < -3500 {
-		return -3500
+	if score < -4200 {
+		return -4200
 	}
 	return score
 }
