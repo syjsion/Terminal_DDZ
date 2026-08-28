@@ -123,15 +123,15 @@ func (a *Agent) ChooseMove(ctx context.Context, view player.PlayerView, legal []
 	if a.difficulty == Easy {
 		return a.chooseEasy(view, legal), nil
 	}
+	if a.difficulty == Hard {
+		return chooseHardV2(ctx, view, legal)
+	}
 	bestID, bestScore := legal[0].ID, -1<<30
 	for _, move := range legal {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
 		score := normalScore(view, move)
-		if a.difficulty == Hard && !move.IsPass {
-			score += hardRemainderScore(view.OwnCards, move)
-		}
 		if score > bestScore {
 			bestID, bestScore = move.ID, score
 		}
