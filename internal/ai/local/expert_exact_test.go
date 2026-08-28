@@ -103,16 +103,86 @@ func TestExpertExactSolverReusesTranspositionCache(t *testing.T) {
 	}
 }
 
-func TestExpertExactEligibilityOnlyUsesTinyEndgames(t *testing.T) {
-	tiny := rolloutState{winner: -1, hands: [3][]game.Card{
+func TestExpertExactEligibilityUsesDynamicComplexity(t *testing.T) {
+	tiny := rolloutState{current: 0, landlord: 0, winner: -1, hands: [3][]game.Card{
 		make([]game.Card, 3), make([]game.Card, 3), make([]game.Card, 4),
 	}}
 	if !expertExactEligible(tiny) {
-		t.Fatal("10-card endgame should use exact solver")
+		t.Fatal("10-card endgame should always attempt exact solve")
 	}
-	larger := tiny
-	larger.hands[2] = make([]game.Card, 5)
-	if expertExactEligible(larger) {
-		t.Fatal("11-card endgame should stay on tactical/rollout search")
+
+	sparse := rolloutState{
+		current:  0,
+		landlord: 0,
+		lead:     0,
+		winner:   -1,
+		hands: [3][]game.Card{
+			{{Rank: game.Rank3}, {Rank: game.Rank7}, {Rank: game.RankJ}, {Rank: game.Rank2}},
+			{{Rank: game.Rank4}, {Rank: game.Rank8}, {Rank: game.RankQ}, {Rank: game.RankA}, {Rank: game.RankSJ}},
+			{{Rank: game.Rank5}, {Rank: game.Rank9}, {Rank: game.Rank10}, {Rank: game.RankK}, {Rank: game.RankBJ}},
+		},
+	}
+	complexity, ok := expertExactComplexity(sparse)
+	if !ok {
+		t.Fatal("sparse 14-card endgame complexity could not be estimated")
+	}
+	if complexity > expertExactComplexityLimit {
+		t.Fatalf("sparse complexity = %d, want <= %d", complexity, expertExactComplexityLimit)
+	}
+	if !expertExactEligible(sparse) {
+		t.Fatal("sparse 14-card endgame should use dynamic exact solve")
+	}
+
+	branchy := rolloutState{
+		current:  0,
+		landlord: 0,
+		lead:     0,
+		winner:   -1,
+		hands: [3][]game.Card{
+			{{Rank: game.Rank3}, {Rank: game.Rank4}, {Rank: game.Rank5}, {Rank: game.Rank6}, {Rank: game.Rank7}, {Rank: game.Rank8}, {Rank: game.Rank9}, {Rank: game.Rank10}},
+			{{Rank: game.RankJ}, {Rank: game.RankQ}, {Rank: game.RankK}},
+			{{Rank: game.RankA}, {Rank: game.Rank2}, {Rank: game.RankSJ}},
+		},
+	}
+	branchComplexity, ok := expertExactComplexity(branchy)
+	if !ok {
+		t.Fatal("branchy 14-card endgame complexity could not be estimated")
+	}
+	if branchComplexity <= expertExactComplexityLimit {
+		t.Fatalf("branchy complexity = %d, want > %d", branchComplexity, expertExactComplexityLimit)
+	}
+	if expertExactEligible(branchy) {
+		t.Fatal("branchy 14-card endgame should stay on tactical/rollout search")
+	}
+
+	tooLarge := sparse
+	tooLarge.hands[0] = append(append([]game.Card(nil), sparse.hands[0]...), game.Card{Rank: game.Rank6})
+	if expertExactEligible(tooLarge) {
+		t.Fatal("15-card endgame must stay outside dynamic exact solve")
+	}
+}
+
+func TestExpertExactNodeBudgetFallsBackWithoutPoisoningCache(t *testing.T) {
+	state := rolloutState{
+		current:  0,
+		landlord: 0,
+		lead:     0,
+		winner:   -1,
+		hands: [3][]game.Card{
+			{{Rank: game.Rank3}, {Rank: game.Rank10}},
+			{{Rank: game.Rank4}},
+			{{Rank: game.Rank5}},
+		},
+	}
+	cache := newExpertTacticalCache(0, 11)
+	if _, solved := solveExpertExactWithLimit(context.Background(), state, cache, 1); solved {
+		t.Fatal("one-node exact budget should force a safe fallback")
+	}
+	if _, ok := cache.lookupExact(state); ok {
+		t.Fatal("incomplete exact search must not cache a root result")
+	}
+
+	if _, solved := solveExpertExact(context.Background(), state, cache); !solved {
+		t.Fatal("normal exact budget should still solve after a bounded fallback")
 	}
 }
