@@ -20,8 +20,8 @@ type rootISMCTSStat struct {
 // chooseExpertV2 performs a root information-set Monte Carlo search. Each
 // simulation re-determinizes hidden cards from public information, while UCB
 // concentrates the rollout budget on moves that are both promising and still
-// under-explored. Tactical positions expand the next one or two replies before
-// falling back to the rollout policy.
+// under-explored. Tactical positions expand up to three replies before falling
+// back to the rollout policy.
 func (a *Agent) chooseExpertV2(ctx context.Context, view player.PlayerView, legal []game.Move) (int, error) {
 	unseen := unseenRankCounts(view)
 	memo := make(map[string]int, 256)
@@ -54,19 +54,21 @@ func (a *Agent) chooseExpertV2(ctx context.Context, view player.PlayerView, lega
 
 	// Seed every root action against the same determinizations. Paired hidden
 	// deals reduce variance between candidate estimates before UCB starts
-	// allocating the remaining budget adaptively.
+	// allocating the remaining budget adaptively. A shared tactical cache also
+	// lets different root actions reuse converged subtrees within the same deal.
 	for n := 0; n < 2; n++ {
 		baseState, ok := sampleRolloutState(view, rng)
 		if !ok {
 			continue
 		}
+		search := newExpertSimulationSearch(view.Seat, rng)
 		for i := range stats {
 			if err := ctx.Err(); err != nil {
 				return 0, err
 			}
 			state := baseState
 			applyRolloutMove(&state, stats[i].move)
-			reward := runExpertSimulationSearch(ctx, state, view.Seat, depth, rng)
+			reward := search.evaluate(ctx, state, depth)
 			stats[i].visits++
 			stats[i].total += reward
 		}
@@ -114,9 +116,9 @@ func expertV2Budget(view player.PlayerView, candidateCount int) (limit, simulati
 	enemyCards := enemyMinCards(view)
 	switch {
 	case len(view.OwnCards) <= 7 || enemyCards <= 2:
-		return 7, 125, 42
+		return 7, 118, 42
 	case len(view.OwnCards) <= 11 || enemyCards <= 5:
-		return 6, 92, 34
+		return 6, 90, 34
 	default:
 		return 5, 60, 25
 	}
