@@ -14,6 +14,7 @@ max_llm_legal_moves = 80
 name = "你"
 
 # type 可选 "local" 或 "llm"
+# local difficulty 可选 "easy"、"normal"、"hard" 或 "expert"
 [ai1]
 name = "Worker-01"
 type = "local"
