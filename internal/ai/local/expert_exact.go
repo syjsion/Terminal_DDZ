@@ -10,7 +10,7 @@ import (
 const (
 	expertExactGuaranteedCardLimit = 10
 	expertExactDynamicCardLimit    = 14
-	expertExactComplexityLimit    = 72
+	expertExactComplexityLimit     = 72
 )
 
 // expertExactEligible dynamically enables full determinized solving. Tiny
@@ -61,7 +61,8 @@ func expertExactComplexity(state rolloutState) (int, bool) {
 }
 
 func expertExactNodeBudget(state rolloutState) int {
-	switch total := rolloutTotalCards(state); {
+	total := rolloutTotalCards(state)
+	switch {
 	case total <= 8:
 		return 30000
 	case total <= expertExactGuaranteedCardLimit:
