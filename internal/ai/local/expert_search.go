@@ -44,25 +44,30 @@ func (a *Agent) chooseExpertV2(ctx context.Context, view player.PlayerView, lega
 	if limit <= 1 || simulations <= 0 {
 		return stats[0].move.ID, nil
 	}
-	stats = stats[:limit]
+	stats = selectExpertRootCandidates(stats, limit, view)
 
 	a.mu.Lock()
 	seed := a.rng.Int63()
 	a.mu.Unlock()
 	rng := rand.New(rand.NewSource(seed))
 
-	// Seed every root action with two determinizations so UCB starts with a
-	// meaningful estimate rather than an arbitrary first-choice bias.
-	for i := range stats {
-		for n := 0; n < 2; n++ {
-			reward, ok, err := expertV2Simulation(ctx, view, stats[i].move, depth, rng)
-			if err != nil {
+	// Seed every root action against the same determinizations. Paired hidden
+	// deals reduce variance between candidate estimates before UCB starts
+	// allocating the remaining budget adaptively.
+	for n := 0; n < 2; n++ {
+		baseState, ok := sampleRolloutState(view, rng)
+		if !ok {
+			continue
+		}
+		for i := range stats {
+			if err := ctx.Err(); err != nil {
 				return 0, err
 			}
-			if ok {
-				stats[i].visits++
-				stats[i].total += reward
-			}
+			state := baseState
+			applyRolloutMove(&state, stats[i].move)
+			reward := runExpertRollout(ctx, state, view.Seat, depth, rng)
+			stats[i].visits++
+			stats[i].total += reward
 		}
 	}
 
@@ -71,6 +76,9 @@ func (a *Agent) chooseExpertV2(ctx context.Context, view player.PlayerView, lega
 		totalVisits += stats[i].visits
 	}
 	remaining := simulations - totalVisits
+	if remaining < 0 {
+		remaining = 0
+	}
 	for step := 0; step < remaining; step++ {
 		if err := ctx.Err(); err != nil {
 			return 0, err
@@ -105,12 +113,53 @@ func expertV2Budget(view player.PlayerView, candidateCount int) (limit, simulati
 	enemyCards := enemyMinCards(view)
 	switch {
 	case len(view.OwnCards) <= 7 || enemyCards <= 2:
-		return 7, 150, 42
+		return 7, 145, 44
 	case len(view.OwnCards) <= 11 || enemyCards <= 5:
-		return 6, 105, 34
+		return 6, 100, 35
 	default:
-		return 5, 65, 24
+		return 5, 62, 25
 	}
+}
+
+func selectExpertRootCandidates(stats []rootISMCTSStat, limit int, view player.PlayerView) []rootISMCTSStat {
+	if limit >= len(stats) {
+		return append([]rootISMCTSStat(nil), stats...)
+	}
+	selected := append([]rootISMCTSStat(nil), stats[:limit]...)
+
+	// Tactical candidates must not disappear merely because a deterministic
+	// heuristic ranked them just outside the normal root beam.
+	if view.LastMove != nil && sameTeam(view, view.LastMove.Seat) {
+		if pass, ok := findRootCandidate(stats, func(move game.Move) bool { return move.IsPass }); ok {
+			selected = ensureRootCandidate(selected, pass)
+		}
+	}
+	if enemyMinCards(view) <= 2 {
+		if bomb, ok := findRootCandidate(stats, func(move game.Move) bool {
+			return move.Type == game.Rocket || move.Type == game.Bomb
+		}); ok {
+			selected = ensureRootCandidate(selected, bomb)
+		}
+	}
+	return selected
+}
+
+func findRootCandidate(stats []rootISMCTSStat, match func(game.Move) bool) (rootISMCTSStat, bool) {
+	for _, stat := range stats {
+		if match(stat.move) {
+			return stat, true
+		}
+	}
+	return rootISMCTSStat{}, false
+}
+
+func ensureRootCandidate(selected []rootISMCTSStat, candidate rootISMCTSStat) []rootISMCTSStat {
+	for _, stat := range selected {
+		if stat.move.ID == candidate.move.ID {
+			return selected
+		}
+	}
+	return append(selected, candidate)
 }
 
 func selectRootISMCTSAction(stats []rootISMCTSStat, totalVisits int) int {
@@ -123,9 +172,9 @@ func selectRootISMCTSAction(stats []rootISMCTSStat, totalVisits int) int {
 		}
 		mean := float64(stat.total) / float64(stat.visits)
 		exploration := 1250.0 * math.Sqrt(logVisits/float64(stat.visits))
-		// Hard-v2 acts as a policy prior. Its influence decays as real rollout
-		// evidence accumulates.
-		prior := float64(stat.baseScore) * 0.10 / math.Sqrt(float64(stat.visits+1))
+		// Hard-v2 acts as a bounded policy prior. Its influence decays as real
+		// rollout evidence accumulates and cannot overwhelm repeated outcomes.
+		prior := float64(clampExpertPrior(stat.baseScore)) * 0.08 / math.Sqrt(float64(stat.visits+1))
 		value := mean + exploration + prior
 		if value > bestValue {
 			best, bestValue = i, value
@@ -151,7 +200,17 @@ func expertV2FinalValue(stat rootISMCTSStat) float64 {
 		return float64(stat.baseScore)
 	}
 	mean := float64(stat.total) / float64(stat.visits)
-	// Rollout outcome dominates, with the deterministic Hard-v2 score used as
-	// a stabilizing tie-breaker for noisy information-set samples.
-	return mean*2.2 + float64(stat.baseScore)
+	// Rollout evidence dominates; the bounded deterministic prior stabilizes
+	// close calls without freezing the search onto its initial ranking.
+	return mean*2.45 + float64(clampExpertPrior(stat.baseScore))*0.40
+}
+
+func clampExpertPrior(score int) int {
+	if score > 8000 {
+		return 8000
+	}
+	if score < -8000 {
+		return -8000
+	}
+	return score
 }
