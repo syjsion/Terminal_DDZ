@@ -1,6 +1,6 @@
 # Terminal 斗地主
 
-一个使用 Go 编写、完全运行在终端中的三人斗地主游戏。它包含完整的 MVP 规则引擎、三档本地 AI、实时记牌器，也可以把两名电脑玩家分别连接到不同的 OpenAI-compatible Chat Completions 服务。
+一个使用 Go 编写、完全运行在终端中的三人斗地主游戏。它包含完整的 MVP 规则引擎、四档本地 AI、实时记牌器，也可以把两名电脑玩家分别连接到不同的 OpenAI-compatible Chat Completions 服务。
 
 规则引擎始终拥有最终决定权：AI 只能从本地生成的合法动作 ID 中选择，无法构造非法牌，也看不到其他玩家的隐藏手牌。
 
@@ -66,14 +66,21 @@ terminal-ddz --help
 
 复制 `config.example.toml` 为当前目录下的 `config.toml`，然后按需修改。也可以通过 `--config` 指定其他路径。
 
-本地 AI 支持 `easy`、`normal`、`hard`：
+本地 AI 支持 `easy`、`normal`、`hard`、`expert`：
 
 ```toml
 [ai1]
 name = "Worker-01"
 type = "local"
-difficulty = "hard"
+difficulty = "expert"
 ```
+
+难度说明：
+
+- `easy`：随机性较强，适合熟悉规则。
+- `normal`：基础启发式策略。
+- `hard`：加入记牌、残局最少手数搜索、报单防守和农民配合。
+- `expert`：在 Hard 的基础上，对未知牌进行多次随机补全，并对高质量候选进行多步局面模拟后再决策。残局和关键抢牌阶段会使用更高的抽样预算，因此思考时间会略长。
 
 ### 两个独立的 LLM Provider
 
@@ -188,6 +195,8 @@ SHA256SUMS
 ## 隐私说明
 
 使用 LLM AI 时，只会向对应 Provider 发送该 AI 自己的手牌、公开底牌、公开历史、剩余牌数和本地生成的合法候选。不会发送其他玩家的隐藏手牌、其他 Provider 的凭据或完整配置文件。
+
+本地 `expert` AI 的未知牌抽样也只基于当前玩家可见的公开信息与自己的手牌，不读取其他玩家的真实隐藏手牌。
 
 ## License
 
