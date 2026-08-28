@@ -16,9 +16,8 @@ func newExpertSimulationSearch(rootSeat int, rng *rand.Rand) *expertSimulationSe
 	return &expertSimulationSearch{cache: newExpertTacticalCache(rootSeat, rng.Int63())}
 }
 
-// runExpertSimulationSearch adds a shallow adversarial/cooperative reply tree
-// before falling back to the rollout policy. The tree is only enabled in
-// tactical positions so Expert gains lookahead without making every move slow.
+// runExpertSimulationSearch adds exact solving for tiny determinizations and a
+// shallow adversarial/cooperative reply tree before falling back to rollout.
 func runExpertSimulationSearch(ctx context.Context, state rolloutState, rootSeat, maxDepth int, rng *rand.Rand) int {
 	return newExpertSimulationSearch(rootSeat, rng).evaluate(ctx, state, maxDepth)
 }
@@ -26,6 +25,11 @@ func runExpertSimulationSearch(ctx context.Context, state rolloutState, rootSeat
 func (s *expertSimulationSearch) evaluate(ctx context.Context, state rolloutState, maxDepth int) int {
 	if value, done := expertTerminalValue(state, s.cache.rootSeat); done {
 		return value
+	}
+	if expertExactEligible(state) {
+		if value, solved := solveExpertExact(ctx, state, s.cache); solved {
+			return value
+		}
 	}
 	plies := expertTacticalPlies(state, s.cache.rootSeat)
 	if plies == 0 || maxDepth <= 0 {
@@ -51,7 +55,8 @@ func expertTacticalPlies(state rolloutState, rootSeat int) int {
 	totalCards := rolloutTotalCards(state)
 
 	// In very small determinizations, one extra explicit reply is affordable
-	// and catches setup moves that a two-ply search can miss.
+	// and catches setup moves that a two-ply search can miss. Positions at or
+	// below expertExactCardLimit are normally intercepted by the exact solver.
 	if totalCards <= 10 || rootCards <= 2 || actorCards <= 2 || enemyCards <= 1 {
 		return 3
 	}
