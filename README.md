@@ -80,7 +80,7 @@ difficulty = "expert"
 - `easy`：随机性较强，适合熟悉规则。
 - `normal`：基础启发式策略。
 - `hard`：加入记牌、残局最少手数搜索、报单防守和农民配合。
-- `expert`：在 Hard 的基础上，对未知牌进行多次随机补全，并对高质量候选进行多步局面模拟后再决策。残局和关键抢牌阶段会使用更高的抽样预算，因此思考时间会略长。
+- `expert`：在 Hard 的基础上使用 Root-ISMCTS。每次模拟都会从当前玩家可见的公开信息重新随机补全未知牌，并使用 UCB 将更多模拟预算自适应地投入到“当前表现好但仍值得探索”的候选。残局和关键抢牌阶段会自动增加模拟次数与深度，因此思考时间会略长。
 
 ### 两个独立的 LLM Provider
 
@@ -175,6 +175,22 @@ go build -o terminal-ddz ./cmd/terminal-ddz
 ```
 
 项目测试不会访问真实 LLM 服务；HTTP 行为由 `httptest.Server` 模拟。
+
+### AI 强度 benchmark
+
+仓库内置 `Expert vs Hard` 的固定角色自对局工具，用于量化算法增强是否真的提升胜率。它会轮换地主座位，分别测试 Expert 当地主以及 Expert 双农民两种场景，避免叫分策略干扰出牌算法比较。
+
+```bash
+go run ./cmd/ai-bench --games 30 --seed 1
+```
+
+需要更稳定的统计时可以增加局数，例如：
+
+```bash
+go run ./cmd/ai-bench --games 200 --seed 1
+```
+
+建议每次修改 AI 后使用相同的 `--games` 和 `--seed` 与旧版本结果比较。Expert 使用随机信息集抽样，因此单次小样本结果可能有波动，局数越多越适合判断整体趋势。
 
 ## Release 下载
 
