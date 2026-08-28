@@ -19,12 +19,13 @@ const (
 	Easy   Difficulty = "easy"
 	Normal Difficulty = "normal"
 	Hard   Difficulty = "hard"
+	Expert Difficulty = "expert"
 )
 
 func ParseDifficulty(value string) (Difficulty, error) {
 	d := Difficulty(strings.ToLower(value))
-	if d != Easy && d != Normal && d != Hard {
-		return "", errors.New("难度必须是 easy、normal 或 hard")
+	if d != Easy && d != Normal && d != Hard && d != Expert {
+		return "", errors.New("难度必须是 easy、normal、hard 或 expert")
 	}
 	return d, nil
 }
@@ -36,7 +37,7 @@ type Agent struct {
 }
 
 func New(difficulty Difficulty, seed int64) *Agent {
-	if difficulty != Easy && difficulty != Normal && difficulty != Hard {
+	if difficulty != Easy && difficulty != Normal && difficulty != Hard && difficulty != Expert {
 		difficulty = Normal
 	}
 	if seed == 0 {
@@ -65,6 +66,8 @@ func (a *Agent) ChooseBid(ctx context.Context, view player.PlayerView, legal []i
 		want = bidForStrength(strength, 8, 12, 16)
 	case Hard:
 		want = bidForStrength(strength, 7, 11, 15)
+	case Expert:
+		want = bidForStrength(strength, 7, 10, 14)
 	}
 	return highestLegalAtMost(legal, want), nil
 }
@@ -125,6 +128,9 @@ func (a *Agent) ChooseMove(ctx context.Context, view player.PlayerView, legal []
 	}
 	if a.difficulty == Hard {
 		return chooseHardV2(ctx, view, legal)
+	}
+	if a.difficulty == Expert {
+		return a.chooseExpert(ctx, view, legal)
 	}
 	bestID, bestScore := legal[0].ID, -1<<30
 	for _, move := range legal {
