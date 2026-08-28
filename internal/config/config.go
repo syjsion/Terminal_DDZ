@@ -70,7 +70,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("general.ai_delay_ms: 不能小于 0")
 	}
 	if !validDifficulty(c.Game.LocalAIDifficulty) {
-		return fmt.Errorf("game.local_ai_difficulty: 必须是 easy、normal 或 hard")
+		return fmt.Errorf("game.local_ai_difficulty: 必须是 easy、normal、hard 或 expert")
 	}
 	if c.Game.MaxLLMLegalMoves < 1 {
 		return fmt.Errorf("game.max_llm_legal_moves: 必须大于 0")
@@ -85,7 +85,7 @@ func (c Config) Validate() error {
 		switch ai.Type {
 		case "local":
 			if !validDifficulty(ai.Difficulty) {
-				return fmt.Errorf("%s.difficulty: 必须是 easy、normal 或 hard", name)
+				return fmt.Errorf("%s.difficulty: 必须是 easy、normal、hard 或 expert", name)
 			}
 		case "llm":
 			if ai.Provider == "" {
@@ -106,7 +106,7 @@ func (c Config) Validate() error {
 }
 
 func validDifficulty(value string) bool {
-	return value == "easy" || value == "normal" || value == "hard"
+	return value == "easy" || value == "normal" || value == "hard" || value == "expert"
 }
 
 func validateProvider(name string, p ProviderConfig) error {
