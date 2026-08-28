@@ -130,7 +130,7 @@ func (a *Agent) ChooseMove(ctx context.Context, view player.PlayerView, legal []
 		return chooseHardV2(ctx, view, legal)
 	}
 	if a.difficulty == Expert {
-		return a.chooseExpert(ctx, view, legal)
+		return a.chooseExpertV2(ctx, view, legal)
 	}
 	bestID, bestScore := legal[0].ID, -1<<30
 	for _, move := range legal {
