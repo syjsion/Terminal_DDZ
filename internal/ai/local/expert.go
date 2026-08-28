@@ -15,13 +15,13 @@ type expertCandidate struct {
 }
 
 type rolloutState struct {
-	hands     [3][]game.Card
-	current   int
-	landlord  int
-	lead      int
-	target    *game.Move
-	passes    int
-	winner    int
+	hands    [3][]game.Card
+	current  int
+	landlord int
+	lead     int
+	target   *game.Move
+	passes   int
+	winner   int
 }
 
 func (a *Agent) chooseExpert(ctx context.Context, view player.PlayerView, legal []game.Move) (int, error) {
